@@ -1,0 +1,593 @@
+{
+  "kind": "template",
+  "type": "Microsoft.Blueprint/blueprints/artifacts",
+  "name": "Mgmtvm",
+  "properties": {
+    "displayName": "Management VM",
+    "description": "Management VM",
+    "dependsOn": [
+       "wvdDeploy",
+       "DNSsharedsvcs",
+       "addsDAUser",
+       "adds",
+       "wvdUsers"
+    ],
+    "template": {
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "resourcePrefix": {
+        "type": "string",
+        "metadata": {
+          "displayName": "Resource Prefix"
+        }
+      },
+      "_artifactsLocationSasToken": {
+        "type": "securestring",
+        "metadata": {
+          "description": "Auto-generated token to access _artifactsLocation. Leave it blank unless you need to provide your own value."
+        },
+        "defaultValue": ""
+      },
+      "baseTime": {
+        "type": "string",
+        "defaultValue": "[utcNow('u')]"
+      },
+      "CreateFileShareScriptURI": {
+        "type": "string"
+      },
+      "mgmtvmNameStatic": {
+        "type": "string",
+        "defaultValue": "-mgmtvm"
+      },
+      "dnsLabelPrefix": {
+        "type": "string",
+        "metadata": {
+          "description": "Unique public DNS prefix for the deployment. The fqdn will look something like '<dnsname>.westus.cloudapp.azure.com'. Up to 62 chars, digits or dashes, lowercase, should start with a letter: must conform to '^[a-z][a-z0-9-]{1,61}[a-z0-9]$'."
+        },
+        "defaultValue": "[concat(toLower(parameters('resourcePrefix')), parameters('mgmtvmNameStatic'))]"
+      },
+      "daUser_AdminUser": {
+        "type": "string",
+        "metadata": {
+          "description": "An admin account created and added to"
+        }
+      },
+      "vaultName": {
+        "type": "string",
+        "metadata": {
+          "description": "The name of the keyvault that contains the secret."
+        },
+        "defaultValue": "[concat(parameters('resourcePrefix'), '-sharedsvcs-kv')]"
+      },
+      "KVsecretName": {
+        "type": "string",
+        "metadata": {
+          "description": "The name of the Key Vault secret."
+        },
+        "defaultValue": "[first(split(parameters('daUser_AdminUser'), '@'))]"
+      },
+      "vaultResourceGroupName": {
+        "type": "string",
+        "metadata": {
+          "description": "The name of the resource group that contains the keyvault."
+        },
+        "defaultValue": "[resourceGroup().name]"
+      },
+      "vaultSubscription": {
+        "type": "string",
+        "defaultValue": "[subscription().subscriptionId]",
+        "metadata": {
+          "description": "The name of the subscription that contains the keyvault."
+        }
+      },
+      "adds_domainName": {
+        "type": "string",
+        "metadata": {
+          "displayName": "Azure ADDS Domain"
+        }
+      },
+      "ouPath": {
+        "type": "string",
+        "metadata": {
+            "description": "OUPath for the domain join"
+        }        
+      },
+      "existingVnetName": {
+        "type": "string",
+        "metadata": {
+          "description": "The name of the virtual network the VMs will be connected to."
+        },
+        "defaultValue": ""
+      },
+      "existingSubnetName": {
+        "type": "string",
+        "metadata": {
+          "description": "The subnet the VMs will be placed in."
+        },
+        "defaultValue": ""
+      },
+      "vmSize": {
+        "type": "string",
+        "metadata": {
+          "description": "The size of the Azure VM."
+        },
+        "defaultValue": ""
+      },
+      "vmAdminUsername": {
+        "type": "string",
+        "defaultValue": "mgmtvm-admin",
+        "metadata": {
+          "description": "The name of the administrator of the management VM. Exclusion list: 'admin','administrator"
+        }
+      },
+      "virtualNetworkResourceGroupName": {
+        "type": "string",
+        "metadata": {
+          "description": "The resource group containing the existing virtual network."
+        },
+        "defaultValue": "[resourceGroup().name]"
+      },
+      "createNetworkSecurityGroup": {
+        "type": "bool",
+        "metadata": {
+          "description": "Whether to create a new network security group or use an existing one"
+        },
+        "defaultValue": false
+      },
+      "usePublicIP": {
+        "type": "bool",
+        "metadata": {
+          "description": "Whether to use a Public IP"
+        },
+        "defaultValue": true
+      },
+      "publicIpAddressSku": {
+        "type": "string",
+        "metadata": {
+          "description": "The sku name of the Public IP"
+        },
+        "allowedValues": [
+          "Basic",
+          "Standard"
+        ],
+        "defaultValue": "Basic"
+      },
+      "location": {
+        "type": "string",
+        "defaultValue": "[resourceGroup().location]",
+        "metadata": {
+          "description": "Location for all resources."
+        }
+      },
+      "ScriptBaseURI":{
+        "type": "string"
+      },
+      "VMUserAssignedIdentity":{
+        "type": "string"
+      }
+    },
+    "variables": {
+      "storageAccountName": "[concat(uniquestring(resourceGroup().id, deployment().name))]",
+      "deployment-prefix": "[concat(parameters('resourcePrefix'), '-sharedsvcs')]",
+      "resourcegroup-name": "[concat(parameters('resourcePrefix'), '-sharedsvcs-rg')]",
+      "key-vault-name": "[concat(variables('deployment-prefix'), '-kv')]",
+      "key-vault-resourceID": "[resourceId('Microsoft.KeyVault/vaults', variables('key-vault-name'))]",
+      "CustomScriptExtensionName": "CreateProfileStoreAndFSLogixPolicy",
+      "existingDomainUsername": "[first(split(parameters('daUser_AdminUser'), '@'))]",
+      "managedDomaintoJoin": "[parameters('adds_domainName')]",
+      "imagePublisher": "MicrosoftWindowsServer",
+      "imageOffer": "WindowsServer",
+      "windowsOSVersion": "2019-Datacenter",
+      "resourceGroup": "[resourceGroup().name]",
+      "nicName": "[concat(parameters('resourcePrefix'),parameters('mgmtvmNameStatic'),string('-nic'))]",
+      "publicIPName": "[concat(parameters('resourcePrefix'),parameters('mgmtvmNameStatic'),string('-pip'))]",
+      "location": "[parameters('location')]",
+      "subnetId": "[resourceId(resourceGroup().name, 'Microsoft.Network/virtualNetworks/subnets', parameters('existingVnetName'), parameters('existingSubnetName'))]"
+    },
+    "resources": [
+      {
+        "apiVersion": "2015-06-15",
+        "type": "Microsoft.Network/publicIPAddresses",
+        "name": "[variables('publicIPName')]",
+        "location": "[parameters('location')]",
+        "properties": {
+          "publicIPAllocationMethod": "Dynamic",
+          "dnsSettings": {
+            "domainNameLabel": "[parameters('dnsLabelPrefix')]"
+          }
+        }
+      },
+      {
+        "apiVersion": "2015-06-15",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[variables('nicName')]",
+        "location": "[parameters('location')]",
+        "dependsOn": [
+          "[concat('Microsoft.Network/publicIPAddresses/', variables('publicIPName'))]"
+        ],
+        "properties": {
+          "ipConfigurations": [
+            {
+              "name": "ipconfig",
+              "properties": {
+                "privateIPAllocationMethod": "Dynamic",
+                "publicIPAddress": {
+                  "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPName'))]"
+                },
+                "subnet": {
+                  "id": "[variables('subnetId')]"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "Microsoft.Storage/storageAccounts",
+        "apiVersion": "2019-06-01",
+        "name": "[variables('storageAccountName')]",
+        "location": "[parameters('location')]",
+        "sku": {
+          "name": "Standard_LRS"
+        }
+      },
+      {
+        "type": "Microsoft.Resources/deployments",
+        "apiVersion": "2019-10-01",
+        "name": "MGMTVMdeploy",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts',variables('storageAccountName'))]",
+            "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+        ],
+        "properties": {
+          "mode": "Incremental",
+          "expressionEvaluationOptions": {
+            "scope": "inner"
+          },
+          "parameters": {
+            "resourcePrefix": {
+              "value": "[parameters('resourcePrefix')]"
+            },
+            "vmname": {
+              "value": "[parameters('dnsLabelPrefix')]"
+            },
+            "vmSize": {
+              "value": "[parameters('vmSize')]"
+            },
+            "vaultName": {
+              "value": "[parameters('vaultName')]"
+            },
+            "KVsecretName": {
+                "value": "[parameters('KVsecretName')]"
+            },
+            "VMUserAssignedIdentity": {
+                "value": "[parameters('VMUserAssignedIdentity')]"
+            },
+            "vmAdminUsername": {
+                "value": "[parameters('vmAdminUsername')]"
+            },
+            "vmAdminPassword": {
+              "reference": {
+                "keyVault": {
+                  "id": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+                },
+                "secretName": "[parameters('KVsecretName')]"
+              }
+            },
+            "vmStorageAccountName": {
+              "value": "[variables('storageAccountName')]"
+            },
+            "mgmtvmNameStatic": {
+              "value": "[parameters('mgmtvmNameStatic')]"
+            },
+            "dnsLabelPrefix": {
+              "value": "[parameters('dnsLabelPrefix')]"
+            }
+        },
+        "template": {
+            "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {
+              "resourcePrefix": {
+                "type": "string"
+              },
+              "vmname": {
+                "type": "string"
+              },
+              "vmSize": {
+                "type": "string"
+              },
+              "vaultName": {
+                "type": "string"
+              },
+              "KVsecretName": {
+                "type": "string"
+              },
+              "VMUserAssignedIdentity": {
+                "type": "string"
+              },
+              "vmAdminUsername": {
+                "type": "string"
+              },
+              "vmAdminPassword": {
+                "type": "securestring"
+              },
+              "vmStorageAccountName": {
+                "type": "string"
+              },
+              "mgmtvmNameStatic": {
+                "type": "string"
+              },
+              "dnsLabelPrefix": {
+                "type": "string"
+              }
+            },
+            "variables": {
+              "imagePublisher": "MicrosoftWindowsServer",
+              "imageOffer": "WindowsServer",
+              "windowsOSVersion": "2019-Datacenter",
+              "nicName": "[concat(parameters('resourcePrefix'),parameters('mgmtvmNameStatic'),string('-nic'))]"
+            },
+            "resources": [
+              {
+                "type": "Microsoft.Compute/virtualMachines",
+                "apiVersion": "2019-07-01",
+                "name": "[parameters('vmname')]",
+                "location": "[resourceGroup().location]",
+                "dependsOn": [],
+                "identity": {
+                    "type": "userAssigned",
+                    "userAssignedIdentities": {
+                        "[parameters('VMUserAssignedIdentity')]": {}
+                    }
+                },
+                "properties": {
+                    "hardwareProfile": {
+                    "vmSize": "[parameters('vmSize')]"
+                    },
+                    "osProfile": {
+                    "computerName": "[parameters('dnsLabelPrefix')]",
+                    "adminUsername": "[parameters('vmAdminUsername')]",
+                    "adminPassword": "[parameters('vmAdminPassword')]",
+                    "windowsConfiguration": {
+                        "enableAutomaticUpdates": true
+                    }
+                    },
+                    "storageProfile": {
+                    "imageReference": {
+                        "publisher": "[variables('imagePublisher')]",
+                        "offer": "[variables('imageOffer')]",
+                        "sku": "[variables('windowsOSVersion')]",
+                        "version": "latest"
+                    },
+                    "osDisk": {
+                      "createOption": "FromImage",
+                      "name": "[concat(parameters('dnsLabelPrefix'), '-OsDisk')]",
+                      "managedDisk": {
+                        "storageAccountType": "StandardSSD_LRS"
+                      }
+                    },
+                    "dataDisks": [
+                        {
+                        "name": "[concat(parameters('dnsLabelPrefix'),'-DataDisk1')]",
+                        "diskSizeGB": 1023,
+                        "lun": 0,
+                        "createOption": "Empty"
+                        }
+                    ]
+                    },
+                    "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                        "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+                        }
+                    ]
+                    },
+                    "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": false,
+                        "storageUri": "[reference(concat('Microsoft.Storage/storageAccounts/', parameters('vmStorageAccountName')), '2015-06-15').primaryEndpoints.blob]"
+                    }
+                    
+                    },
+                    "licenseType": "Windows_Server"
+                }
+            }
+            ]
+          }
+        }
+      },
+      {
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "2019-07-01",
+        "name": "[concat(parameters('dnsLabelPrefix'),'/', variables('CustomScriptExtensionName'))]",
+        "location": "[variables('location')]",
+        "dependsOn": [
+          "MGMTVMjoindomain"
+        ],
+        "properties": {
+          "publisher": "Microsoft.Compute",
+          "type": "CustomScriptExtension",
+          "typeHandlerVersion": "1.7",
+          "autoUpgradeMinorVersion": true,
+          "settings": {
+            "fileUris": [
+              "[parameters('CreateFileShareScriptURI')]"
+            ],
+            "commandToExecute": "[concat('powershell.exe -ExecutionPolicy Unrestricted -File Create-AzAADDSJoinedFileshare.ps1 -ResourceGroupName ', resourceGroup().name ,' -StorageAccountName ',toLower(substring(concat(parameters('resourcePrefix'),uniqueString(subscription().id)), 0, 14)),' -Verbose')]"
+          }
+        }
+      },
+      {
+        "type": "Microsoft.Resources/deployments",
+        "apiVersion": "2019-10-01",
+        "name": "MGMTVMjoindomain",
+        "dependsOn": [
+          "MGMTVMdeploy"
+        ],
+        "properties": {
+          "mode": "Incremental",
+          "expressionEvaluationOptions": {
+            "scope": "inner"
+          },
+          "parameters": {
+            "location": {
+              "value": "[parameters('location')]"
+            },
+            "vmname": {
+              "value": "[parameters('dnsLabelPrefix')]"
+            },
+            "domainToJoin": {
+              "value": "[variables('managedDomaintoJoin')]"
+            },
+            "mvOUPath": {
+              "value": "[parameters('ouPath')]"
+            },
+            "mvUser": {
+              "value": "[parameters('daUser_AdminUser')]"
+            },
+            "kvSub": {
+              "value": "[parameters('vaultSubscription')]"
+            },
+            "kvRG": {
+              "value": "[resourceGroup().name]"
+            },
+            "kvName": {
+              "value": "[parameters('vaultName')]"
+            },
+            "domainadminPassword": {
+              "reference": {
+                "keyVault": {
+                  "id": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+                },
+                "secretName": "[parameters('KVsecretName')]"
+              }
+            }
+          },
+          "template": {
+            "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {
+              "domainadminPassword": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string"
+              },
+              "vmname": {
+                "type": "string"
+              },
+              "mvOUPath": {
+                "type": "string"
+              },
+              "mvUser": {
+                "type": "string"
+              },
+              "kvSub": {
+                "type": "string"
+              },
+              "kvRG": {
+                "type": "string"
+              },
+              "kvName": {
+                "type": "string"
+              },
+              "domainToJoin": {
+                "type": "string"
+              }
+            },
+            "variables": {},
+            "resources": [
+              {
+                "apiVersion": "2018-10-01",
+                "type": "Microsoft.Compute/virtualMachines/extensions",
+                "name": "[concat(parameters('vmname'),'/joindomain')]",
+                "location": "[parameters('location')]",
+                "dependsOn": [],
+                "properties": {
+                  "publisher": "Microsoft.Compute",
+                  "type": "JsonADDomainExtension",
+                  "typeHandlerVersion": "1.3",
+                  "autoUpgradeMinorVersion": true,
+                  "settings": {
+                    "name": "[parameters('domainToJoin')]",
+                    "ouPath": "[parameters('mvOUPath')]",
+                    "user": "[parameters('mvUser')]",
+                    "Restart": "true",
+                    "Options": "3"
+                    
+                  },
+                  "protectedSettings": {
+                    "password": "[parameters('domainadminPassword')]"
+                  }
+                }
+            }
+            ]
+          }
+        }
+      }
+    ],   
+    "outputs": {
+      "Name": {
+        "type": "string",
+        "value": "[variables('managedDomaintoJoin')]"
+      },
+      "User": {
+        "type": "string",
+        "value": "[variables('existingDomainUsername')]"
+      },
+      "KeyVaultID": {
+        "type": "string",
+        "value": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+      }
+  }
+}, 
+  "resourceGroup": "ResourceGroup",
+  "parameters": {
+    "adds_domainName": {
+      "value": "[parameters('adds_domainName')]"
+    },
+    "ouPath": {
+      "value": ""
+    },
+    "daUser_AdminUser": {
+      "value": "[parameters('daUser_AdminUser')]"
+    },
+    "resourcePrefix": {
+      "value": "[parameters('resourcePrefix')]"
+    },
+    "location": {
+      "value": "[resourceGroup().location]"
+    },
+    "createNetworkSecurityGroup": {
+      "value": false
+    },
+    "CreateFileShareScriptURI": {
+      "value": "[concat(parameters('_ScriptURI'),'/Create-AzAADDSJoinedFileshare.ps1')]"
+    },
+    "vmSize": {
+      "value": "Standard_D2s_v3"
+    },
+    "existingVnetName": {
+      "value": "[parameters('adds_vnetName')]"
+    },
+    "existingSubnetName": {
+      "value": "sharedsvcs"
+    },
+    "virtualNetworkResourceGroupName": {
+      "value": "[resourceGroup().name]"
+    },
+    "usePublicIP": {
+      "value": true
+    },
+    "ScriptBaseURI": {
+      "value": "[parameters('_ScriptURI')]"
+    },
+    "VMUserAssignedIdentity":{
+      "value": "[parameters('script_executionUserResourceID')]"
+    }
+
+    }
+ }
+}

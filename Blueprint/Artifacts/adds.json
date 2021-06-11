@@ -1,0 +1,107 @@
+{
+  "kind": "template",
+  "type": "Microsoft.Blueprint/blueprints/artifacts",
+  "name": "adds",
+  "properties": {
+    "displayName": "Azure ADDS template",
+    "description": "",
+    "dependsOn": [
+      "keyvault"
+    ],
+    "template": {
+      "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {
+        "resourcePrefix": {
+          "type": "string",
+          "metadata": {
+            "displayName": "Resource Prefix"
+          }
+        },
+        "emailNotifications": { 
+          "type": "string",
+          "metadata": {
+            "displayName": "Notification email addresses"
+          }
+        },
+        "sku": {
+          "type": "string"
+        },
+        "domainConfigurationType": {
+          "type": "string"
+        },
+        "domainName": {
+          "type": "string"
+        },
+        "filteredSync": {
+          "type": "string"
+        },
+        "notificationSettings": {
+          "type": "object"
+        },
+        "vnetName": {
+          "type": "string"
+        }
+      },
+      "variables": {
+        "deployment-prefix": "[concat(parameters('resourcePrefix'), '-sharedsvcs')]"
+      },
+      "resources": [
+        {
+          "apiVersion": "2020-01-01",
+          "type": "Microsoft.AAD/DomainServices",
+          "name": "[parameters('domainName')]",
+          "location": "[resourceGroup().location]",
+          "dependsOn": [],
+          "properties": {
+            "domainName": "[parameters('domainName')]",
+            "filteredSync": "[parameters('filteredSync')]",
+            "domainConfigurationType": "[parameters('domainConfigurationType')]",
+            "notificationSettings": "[parameters('notificationSettings')]",
+            "replicaSets": [
+              {
+                "subnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'),'AzureADDSSubnet')]",
+                "location": "[resourceGroup().location]"
+              }
+            ],
+            "sku": "[parameters('sku')]"
+          }
+        }
+      ],
+      "outputs": {}
+    },
+    "resourceGroup": "ResourceGroup",
+    "parameters": {
+      "resourcePrefix": {
+        "value": "[parameters('resourcePrefix')]"
+      },
+      "emailNotifications": {
+        "value": "[parameters('adds_emailNotifications')]"
+      },
+      "sku": {
+        "value": "Enterprise"
+      },
+      "domainConfigurationType": {
+        "value": "FullySynced"
+      },
+      "domainName": {
+        "value": "[parameters('adds_domainName')]"
+      },
+      "filteredSync": {
+        "value": "Disabled"
+      },
+      "notificationSettings": {
+        "value": {
+          "notifyGlobalAdmins": "Enabled",
+          "notifyDcAdmins": "Enabled",
+          "additionalRecipients": [
+            "[parameters('adds_emailNotifications')]"
+          ]
+        }
+      },
+      "vnetName": {
+        "value": "[parameters('adds_vnetName')]"
+      }
+    }
+  }
+}
